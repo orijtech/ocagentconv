@@ -33,7 +33,7 @@ var (
 	errNilViewData = errors.New("expecting a non-nil view.Data")
 )
 
-func viewDataToMetric(vd *view.Data) (*metricspb.Metric, error) {
+func ViewDataToMetric(vd *view.Data) (*metricspb.Metric, error) {
 	if vd == nil {
 		return nil, errNilViewData
 	}
