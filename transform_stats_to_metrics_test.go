@@ -1152,7 +1152,7 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 
 func testViewDataToMetrics(t *testing.T, tests []*test) {
 	for i, tt := range tests {
-		got, err := viewDataToMetric(tt.in)
+		got, err := ViewDataToMetric(tt.in)
 		if tt.wantErr != "" {
 			continue
 		}
