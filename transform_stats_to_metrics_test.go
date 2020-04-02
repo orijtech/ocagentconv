@@ -1077,6 +1077,36 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 	}
 
 	tests := []*test{
+		{
+			in: &view.Data{
+				Start: startTime,
+				End:   endTime,
+				View: &view.View{
+					Name:        "ocagent.io/counts",
+					Description: "count of runners for a 100m dash",
+					Aggregation: view.Count(),
+					TagKeys:     []tag.Key{keyField, keyName},
+					Measure:     mSprinterLatencyMs,
+				},
+				Rows: []*view.Row{
+					{
+						Tags: []tag.Tag{
+							{Key: keyField, Value: "small-field"},
+							{Key: keyName, Value: "sprints"},
+						},
+						Data: &view.CountData{Value: 25},
+					},
+					{
+						Tags: []tag.Tag{
+							{Key: keyName, Value: "sprinter-#10"},
+							{Key: keyPlayerName, Value: "some-player"},
+						},
+						Data: &view.CountData{Value: 10},
+					},
+				},
+			},
+			wantErr: "no tag key named: \"player_name\"",
+		},
 		// Testing with a stats.Float64 measure.
 		{
 			in: vd,

@@ -177,7 +177,7 @@ func viewDataToTimeseries(vd *view.Data) ([]*metricspb.TimeSeries, error) {
 	for _, row := range vd.Rows {
 		labelValues, err := labelValuesFromTags(row.Tags, keysToColumns)
 		if err != nil {
-			return nil, fmt.Errorf("Label values from tags: %v", err)
+			return nil, err
 		}
 		point := rowToPoint(vd.View, row, endTimestamp, mType)
 		timeseries = append(timeseries, &metricspb.TimeSeries{
@@ -277,7 +277,7 @@ func labelValuesFromTags(tags []tag.Tag, keysToColumns map[string]int) ([]*metri
 	for _, tag_ := range tags {
 		i, ok := keysToColumns[tag_.Key.Name()]
 		if !ok {
-			return nil, fmt.Errorf("No tag key named %q", tag_.Key.Name())
+			return nil, fmt.Errorf("no tag key named %q", tag_.Key.Name())
 		}
 		labelValues[i].Value = tag_.Value
 		labelValues[i].HasValue = true
