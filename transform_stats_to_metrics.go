@@ -16,6 +16,7 @@ package ocagent
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"go.opencensus.io/stats"
@@ -164,9 +165,20 @@ func viewDataToTimeseries(vd *view.Data) ([]*metricspb.TimeSeries, error) {
 	mType := measureTypeFromMeasure(vd.View.Measure)
 	timeseries := make([]*metricspb.TimeSeries, 0, len(vd.Rows))
 	// It is imperative that the ordering of "LabelValues" matches those
-	// of the Label keys in the metric descriptor.
+	// of the Label keys in the metric descriptor. Every row might have values for
+	// all keys or some of the keys or none. However, there should never be a
+	// value without its key in the metric descriptor.
+	keysToColumns := make(map[string]int)
+
+	for i, tk := range vd.View.TagKeys {
+		keysToColumns[tk.Name()] = i
+	}
+
 	for _, row := range vd.Rows {
-		labelValues := labelValuesFromTags(row.Tags)
+		labelValues, err := labelValuesFromTags(row.Tags, keysToColumns)
+		if err != nil {
+			return nil, fmt.Errorf("Label values from tags: %v", err)
+		}
 		point := rowToPoint(vd.View, row, endTimestamp, mType)
 		timeseries = append(timeseries, &metricspb.TimeSeries{
 			StartTimestamp: startTimestamp,
@@ -249,26 +261,26 @@ func bucketsToProtoBuckets(countPerBucket []int64) []*metricspb.DistributionValu
 	return distBuckets
 }
 
-func labelValuesFromTags(tags []tag.Tag) []*metricspb.LabelValue {
-	if len(tags) == 0 {
-		return nil
+func labelValuesFromTags(tags []tag.Tag, keysToColumns map[string]int) ([]*metricspb.LabelValue, error) {
+	// It is imperative that we set the "HasValue" attribute,
+	// in order to distinguish missing a label from the empty string.
+	// https://godoc.org/github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1#LabelValue.HasValue
+
+	labelValues := make([]*metricspb.LabelValue, len(keysToColumns))
+	for i := 0; i < len(labelValues); i++ {
+		labelValues[i] = &metricspb.LabelValue{
+			Value:    "",
+			HasValue: false,
+		}
 	}
 
-	labelValues := make([]*metricspb.LabelValue, 0, len(tags))
 	for _, tag_ := range tags {
-		labelValues = append(labelValues, &metricspb.LabelValue{
-			Value: tag_.Value,
-
-			// It is imperative that we set the "HasValue" attribute,
-			// in order to distinguish missing a label from the empty string.
-			// https://godoc.org/github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1#LabelValue.HasValue
-			//
-			// OpenCensus-Go uses non-pointers for tags as seen by this function's arguments,
-			// so the best case that we can use to distinguish missing labels/tags from the
-			// empty string is by checking if the Tag.Key.Name() != "" to indicate that we have
-			// a value.
-			HasValue: tag_.Key.Name() != "",
-		})
+		i, ok := keysToColumns[tag_.Key.Name()]
+		if !ok {
+			return nil, fmt.Errorf("No tag key named %q", tag_.Key.Name())
+		}
+		labelValues[i].Value = tag_.Value
+		labelValues[i].HasValue = true
 	}
-	return labelValues
+	return labelValues, nil
 }
