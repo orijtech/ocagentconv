@@ -1037,24 +1037,25 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 	view.Register(latencyView)
 	defer view.Unregister(latencyView)
 
-	stats.RecordWithTags(context.Background(), []tag.Mutator{
+	ctx := context.Background()
+	stats.RecordWithTags(ctx, []tag.Mutator{
 		tag.Upsert(keyField, "main-field"),
 		tag.Upsert(keyName, "sprint-1"),
 		tag.Upsert(keyPlayerName, "player-1"),
 	}, mSprinterLatencyMs.M(2))
-	stats.RecordWithTags(context.Background(), []tag.Mutator{
+	stats.RecordWithTags(ctx, []tag.Mutator{
 		tag.Upsert(keyField, "main-field"),
 		// Missing Sprint Name
 		tag.Upsert(keyPlayerName, "player-2"),
 	}, mSprinterLatencyMs.M(4))
-	stats.RecordWithTags(context.Background(), []tag.Mutator{
+	stats.RecordWithTags(ctx, []tag.Mutator{
 		tag.Upsert(keyField, ""), // Empty field name
 		tag.Upsert(keyName, ""),  // Empty sprint name
 		// Duplicate tag values. Only the most recent tag value should be used.
 		tag.Upsert(keyPlayerName, "player-x"),
 		tag.Upsert(keyPlayerName, "player-3"),
 	}, mSprinterLatencyMs.M(6))
-	stats.RecordWithTags(context.Background(), []tag.Mutator{}, mSprinterLatencyMs.M(8))
+	stats.RecordWithTags(ctx, []tag.Mutator{}, mSprinterLatencyMs.M(8))
 
 	rows, err := view.RetrieveData(latencyView.Name)
 	if err != nil {
@@ -1062,7 +1063,7 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 	}
 
 	// Ordering of rows might be different from the order in which they were
-	// recorded. Sorting them by recorded measurement values for comparison.
+	// recorded. Sort them by recorded measurement values for comparison.
 	sort.SliceStable(rows, func(i, j int) bool {
 		l := rows[i].Data.(*view.SumData)
 		r := rows[j].Data.(*view.SumData)
@@ -1105,7 +1106,7 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 					},
 				},
 			},
-			wantErr: "no tag key named: \"player_name\"",
+			wantErr: "no tag key named \"player_name\"",
 		},
 		// Testing with a stats.Float64 measure.
 		{

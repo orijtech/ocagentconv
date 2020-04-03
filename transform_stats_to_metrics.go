@@ -166,16 +166,16 @@ func viewDataToTimeseries(vd *view.Data) ([]*metricspb.TimeSeries, error) {
 	timeseries := make([]*metricspb.TimeSeries, 0, len(vd.Rows))
 	// It is imperative that the ordering of "LabelValues" matches those
 	// of the Label keys in the metric descriptor. Every row might have values for
-	// all keys or some of the keys or none. However, there should never be a
+	// all the keys or some of the keys or none. However, there should never be a
 	// value without its key in the metric descriptor.
-	keysToColumns := make(map[string]int)
+	tagKeyToColumnIndex := make(map[string]int)
 
-	for i, tk := range vd.View.TagKeys {
-		keysToColumns[tk.Name()] = i
+	for columnIndex, tagKey := range vd.View.TagKeys {
+		tagKeyToColumnIndex[tagKey.Name()] = columnIndex
 	}
 
 	for _, row := range vd.Rows {
-		labelValues, err := labelValuesFromTags(row.Tags, keysToColumns)
+		labelValues, err := labelValuesFromTags(row.Tags, tagKeyToColumnIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -261,26 +261,22 @@ func bucketsToProtoBuckets(countPerBucket []int64) []*metricspb.DistributionValu
 	return distBuckets
 }
 
-func labelValuesFromTags(tags []tag.Tag, keysToColumns map[string]int) ([]*metricspb.LabelValue, error) {
-	// It is imperative that we set the "HasValue" attribute,
-	// in order to distinguish missing a label from the empty string.
-	// https://godoc.org/github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1#LabelValue.HasValue
-
-	labelValues := make([]*metricspb.LabelValue, len(keysToColumns))
+func labelValuesFromTags(tags []tag.Tag, tagKeyToColumnIndex map[string]int) ([]*metricspb.LabelValue, error) {
+	labelValues := make([]*metricspb.LabelValue, len(tagKeyToColumnIndex))
 	for i := 0; i < len(labelValues); i++ {
-		labelValues[i] = &metricspb.LabelValue{
-			Value:    "",
-			HasValue: false,
-		}
+		labelValues[i] = &metricspb.LabelValue{}
 	}
 
 	for _, tag_ := range tags {
-		i, ok := keysToColumns[tag_.Key.Name()]
+		columnIndex, ok := tagKeyToColumnIndex[tag_.Key.Name()]
 		if !ok {
 			return nil, fmt.Errorf("no tag key named %q", tag_.Key.Name())
 		}
-		labelValues[i].Value = tag_.Value
-		labelValues[i].HasValue = true
+		labelValues[columnIndex].Value = tag_.Value
+		// It is imperative that we set the "HasValue" attribute,
+		// in order to distinguish missing a label from the empty string.
+		// https://godoc.org/github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1#LabelValue.HasValue
+		labelValues[columnIndex].HasValue = true
 	}
 	return labelValues, nil
 }
