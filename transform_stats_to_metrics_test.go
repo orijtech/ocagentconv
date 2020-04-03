@@ -15,11 +15,12 @@
 package ocagent
 
 import (
-	"encoding/json"
-	"reflect"
+	"context"
+	"sort"
 	"testing"
 	"time"
 
+	"github.com/golang/protobuf/proto"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
@@ -27,6 +28,7 @@ import (
 	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
 
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/google/go-cmp/cmp"
 )
 
 var (
@@ -758,7 +760,7 @@ func TestViewDataToMetrics_Count(t *testing.T) {
 						Tags: []tag.Tag{
 							{Key: keyField, Value: "main-field"},
 							{Key: keyName, Value: "sprinter-#10"},
-							{Key: keyName, Value: "player_1"},
+							{Key: keyPlayerName, Value: "player_1"},
 						},
 						Data: &view.CountData{Value: 3},
 					},
@@ -766,7 +768,7 @@ func TestViewDataToMetrics_Count(t *testing.T) {
 						Tags: []tag.Tag{
 							{Key: keyField, Value: "small-field"},
 							{Key: keyName, Value: "sprints"},
-							{Key: keyName, Value: "player_2"},
+							{Key: keyPlayerName, Value: "player_2"},
 						},
 						Data: &view.CountData{Value: 1},
 					},
@@ -944,7 +946,7 @@ func TestViewDataToMetrics_Sum(t *testing.T) {
 						Tags: []tag.Tag{
 							{Key: keyField, Value: "main-field"},
 							{Key: keyName, Value: "sprinter-#10"},
-							{Key: keyName, Value: "player_1"},
+							{Key: keyPlayerName, Value: "player_1"},
 						},
 						Data: &view.SumData{Value: 3},
 					},
@@ -952,7 +954,7 @@ func TestViewDataToMetrics_Sum(t *testing.T) {
 						Tags: []tag.Tag{
 							{Key: keyField, Value: "small-field"},
 							{Key: keyName, Value: "sprints"},
-							{Key: keyName, Value: "player_2"},
+							{Key: keyPlayerName, Value: "player_2"},
 						},
 						Data: &view.SumData{Value: 1},
 					},
@@ -1024,30 +1026,91 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 	startTime := time.Date(2018, 11, 25, 15, 38, 18, 997, time.UTC)
 	endTime := startTime.Add(100 * time.Millisecond)
 
+	latencyView := &view.View{
+		Name:        "ocagent.io/latency",
+		Description: "speed of the various runners",
+		Aggregation: view.Sum(),
+		TagKeys:     []tag.Key{keyField, keyName, keyPlayerName},
+		Measure:     mSprinterLatencyMs,
+	}
+
+	view.Register(latencyView)
+	defer view.Unregister(latencyView)
+
+	ctx := context.Background()
+	stats.RecordWithTags(ctx, []tag.Mutator{
+		tag.Upsert(keyField, "main-field"),
+		tag.Upsert(keyName, "sprint-1"),
+		tag.Upsert(keyPlayerName, "player-1"),
+	}, mSprinterLatencyMs.M(2))
+	stats.RecordWithTags(ctx, []tag.Mutator{
+		tag.Upsert(keyField, "main-field"),
+		// Missing Sprint Name
+		tag.Upsert(keyPlayerName, "player-2"),
+	}, mSprinterLatencyMs.M(4))
+	stats.RecordWithTags(ctx, []tag.Mutator{
+		tag.Upsert(keyField, ""), // Empty field name
+		tag.Upsert(keyName, ""),  // Empty sprint name
+		// Duplicate tag values. Only the most recent tag value should be used.
+		tag.Upsert(keyPlayerName, "player-x"),
+		tag.Upsert(keyPlayerName, "player-3"),
+	}, mSprinterLatencyMs.M(6))
+	stats.RecordWithTags(ctx, []tag.Mutator{}, mSprinterLatencyMs.M(8))
+
+	rows, err := view.RetrieveData(latencyView.Name)
+	if err != nil {
+		t.Fatalf("Error retrieving view data: %v", err)
+	}
+
+	// Ordering of rows might be different from the order in which they were
+	// recorded. Sort them by recorded measurement values for comparison.
+	sort.SliceStable(rows, func(i, j int) bool {
+		l := rows[i].Data.(*view.SumData)
+		r := rows[j].Data.(*view.SumData)
+		return l.Value < r.Value
+	})
+
+	vd := &view.Data{
+		View:  latencyView,
+		Start: startTime,
+		End:   endTime,
+		Rows:  rows,
+	}
+
 	tests := []*test{
-		// Testing with a stats.Float64 measure.
 		{
 			in: &view.Data{
 				Start: startTime,
 				End:   endTime,
 				View: &view.View{
-					Name:        "ocagent.io/latency",
-					Description: "speed of the various runners",
-					Aggregation: view.Sum(),
-					TagKeys:     []tag.Key{keyField, keyName, keyPlayerName},
+					Name:        "ocagent.io/counts",
+					Description: "count of runners for a 100m dash",
+					Aggregation: view.Count(),
+					TagKeys:     []tag.Key{keyField, keyName},
 					Measure:     mSprinterLatencyMs,
 				},
 				Rows: []*view.Row{
 					{
 						Tags: []tag.Tag{
-							{}, // Testing a missing tag
-							{Key: keyName, Value: "sprinter-#10"},
-							{Key: keyPlayerName, Value: ""},
+							{Key: keyField, Value: "small-field"},
+							{Key: keyName, Value: "sprints"},
 						},
-						Data: &view.SumData{Value: 27},
+						Data: &view.CountData{Value: 25},
+					},
+					{
+						Tags: []tag.Tag{
+							{Key: keyName, Value: "sprinter-#10"},
+							{Key: keyPlayerName, Value: "some-player"},
+						},
+						Data: &view.CountData{Value: 10},
 					},
 				},
 			},
+			wantErr: "no tag key named \"player_name\"",
+		},
+		// Testing with a stats.Float64 measure.
+		{
+			in: vd,
 			want: &metricspb.Metric{
 				MetricDescriptor: &metricspb.MetricDescriptor{
 					Name:        "ocagent.io/latency",
@@ -1067,9 +1130,9 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 							Nanos:   997,
 						},
 						LabelValues: []*metricspb.LabelValue{
-							{Value: "", HasValue: false},
-							{Value: "sprinter-#10", HasValue: true},
-							{Value: "", HasValue: true},
+							{Value: "main-field", HasValue: true},
+							{Value: "sprint-1", HasValue: true},
+							{Value: "player-1", HasValue: true},
 						},
 						Points: []*metricspb.Point{
 							{
@@ -1077,59 +1140,19 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 									Seconds: 1543160298,
 									Nanos:   100000997,
 								},
-								Value: &metricspb.Point_DoubleValue{DoubleValue: 27},
+								Value: &metricspb.Point_DoubleValue{DoubleValue: 2},
 							},
 						},
 					},
-				},
-			},
-		},
-
-		// Testing with a stats.Int64 measure.
-		{
-			in: &view.Data{
-				Start: startTime,
-				End:   endTime,
-				View: &view.View{
-					Name:        "ocagent.io/fouls",
-					Description: "the number of fouls by players",
-					Aggregation: view.Sum(),
-					TagKeys:     []tag.Key{keyField, keyName, keyPlayerName},
-					Measure:     mFouls,
-				},
-				Rows: []*view.Row{
-					{
-						Tags: []tag.Tag{
-							{},
-							{Key: keyName, Value: "player_1"},
-							{Key: keyField, Value: ""},
-						},
-						Data: &view.SumData{Value: 3},
-					},
-				},
-			},
-			want: &metricspb.Metric{
-				MetricDescriptor: &metricspb.MetricDescriptor{
-					Name:        "ocagent.io/fouls",
-					Description: "the number of fouls by players",
-					Unit:        "1",
-					Type:        metricspb.MetricDescriptor_CUMULATIVE_INT64,
-					LabelKeys: []*metricspb.LabelKey{
-						{Key: "field"},
-						{Key: "name"},
-						{Key: "player_name"},
-					},
-				},
-				Timeseries: []*metricspb.TimeSeries{
 					{
 						StartTimestamp: &timestamp.Timestamp{
 							Seconds: 1543160298,
 							Nanos:   997,
 						},
 						LabelValues: []*metricspb.LabelValue{
-							{Value: "", HasValue: false},
-							{Value: "player_1", HasValue: true},
-							{Value: "", HasValue: true},
+							{Value: "main-field", HasValue: true},
+							{HasValue: false},
+							{Value: "player-2", HasValue: true},
 						},
 						Points: []*metricspb.Point{
 							{
@@ -1137,12 +1160,51 @@ func TestViewDataToMetrics_MissingVsEmptyLabelValues(t *testing.T) {
 									Seconds: 1543160298,
 									Nanos:   100000997,
 								},
-								Value: &metricspb.Point_Int64Value{Int64Value: 3},
+								Value: &metricspb.Point_DoubleValue{DoubleValue: 4},
+							},
+						},
+					},
+					{
+						StartTimestamp: &timestamp.Timestamp{
+							Seconds: 1543160298,
+							Nanos:   997,
+						},
+						LabelValues: []*metricspb.LabelValue{
+							{HasValue: false},
+							{HasValue: false},
+							{Value: "player-3", HasValue: true},
+						},
+						Points: []*metricspb.Point{
+							{
+								Timestamp: &timestamp.Timestamp{
+									Seconds: 1543160298,
+									Nanos:   100000997,
+								},
+								Value: &metricspb.Point_DoubleValue{DoubleValue: 6},
+							},
+						},
+					},
+					{
+						StartTimestamp: &timestamp.Timestamp{
+							Seconds: 1543160298,
+							Nanos:   997,
+						},
+						LabelValues: []*metricspb.LabelValue{
+							{HasValue: false},
+							{HasValue: false},
+							{HasValue: false},
+						},
+						Points: []*metricspb.Point{
+							{
+								Timestamp: &timestamp.Timestamp{
+									Seconds: 1543160298,
+									Nanos:   100000997,
+								},
+								Value: &metricspb.Point_DoubleValue{DoubleValue: 8},
 							},
 						},
 					},
 				},
-				Resource: nil,
 			},
 		},
 	}
@@ -1167,17 +1229,8 @@ func testViewDataToMetrics(t *testing.T, tests []*test) {
 			continue
 		}
 
-		if !reflect.DeepEqual(got, tt.want) {
-			gj := serializeAsJSON(got)
-			wj := serializeAsJSON(tt.want)
-			if gj != wj {
-				t.Errorf("#%d: Unmatched JSON\nGot:\n\t%s\nWant:\n\t%s", i, gj, wj)
-			}
+		if diff := cmp.Diff(tt.want, got, cmp.Comparer(proto.Equal)); diff != "" {
+			t.Errorf("metric mismatch (-want +got):\n%v", diff)
 		}
 	}
-}
-
-func serializeAsJSON(v interface{}) string {
-	blob, _ := json.MarshalIndent(v, "", "  ")
-	return string(blob)
 }
